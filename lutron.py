@@ -23,6 +23,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 import sys, argparse, os
 from datetime import timedelta
+from inspect import signature
 import asyncio
 
 from pylutron_caseta.smartbridge import Smartbridge, _LEAP_DEVICE_TYPES
@@ -242,7 +243,8 @@ class Caseta(MQTT):
         self.bridgeip = bridgeip
         self.bridge = None
         self.loop = asyncio.get_event_loop()
-        self._method_dict.update({func:getattr(Smartbridge, func)  for func in dir(Smartbridge) if callable(getattr(Smartbridge, func)) and not func.startswith("_")})
+        self.bridge_methods = {func:getattr(Smartbridge, func) for func in dir(Smartbridge) if callable(getattr(Smartbridge, func)) and not func.startswith("_")}
+        self._method_dict.update(self.bridge_methods)
         
     def _setup(self):
         if all([os.path.exists(f) for f in self.certs.values()]):
@@ -382,22 +384,25 @@ class Caseta(MQTT):
         extract command and args from MQTT msg, add device_name to args
         '''
         device_name = msg.topic.split('/')[-2]
-        device_name = msg.topic.split('/')[-1] if device_name == self._name else device_name
+        device_name = device_name = msg.topic.split('/')[-1] if device_name == self._name else device_name
         command, args = super()._get_command(msg)
-        if not args:
-            device_id, _ = self._device_id_from_name(device_name)
-            args = [self.bridge, device_id]
-        else:
-            device_id, is_button = self._device_id_from_name(device_name, *args)
-            if device_id:
-                if is_button:
-                    args = [device_id]
-                else:
-                    if isinstance(args, list):
-                        args.insert(0, device_id)
-                    else:
-                        args = [device_id, args]
-        self.log.debug('Received command: command: {}, args: {}'.format(command, args))    
+        self.log.info('Received command: {}, device: {}, args: {}'.format(command, device_name, args))
+        nparams = len(signature(self._method_dict[command]).parameters)
+        br = self.bridge if command in self.bridge_methods.keys() else None
+        args = [args] if not isinstance(args, list) else args
+        device_id, is_button = self._device_id_from_name(device_name, *args)
+        if len(args) > 0 and args[0] is None:
+            args.pop(0)
+        if device_id:
+            if is_button:
+                args = [device_id]
+            else:
+                args.insert(0, device_id)
+                if br:
+                    args.insert(0, br)
+        while len(args) > nparams:  #truncate extra parameters
+            args.pop()
+        self.log.info('Sending command: command: {}, args: {}'.format(command, args))    
         return command, args
         
     def stop(self):
