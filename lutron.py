@@ -150,6 +150,7 @@ class PicoButton(Device):
         self.long_press_time = 1
         self.start = self.loop.time()
         self._long_press_task = None
+        self.long_press_active = False
         if self.type not in self.picobuttons.keys():
             self.log.warning('Adding button type: {}'.format(self.type))
             self.picobuttons[self.type] = {}
@@ -159,6 +160,9 @@ class PicoButton(Device):
             self.current_state = msg
         self.log.info('{}: {}, Button: {}({}), action: {}'.format(self.type, self.name, self.button_number, self.button_name, self.current_state_text))
         self.publish('{}/{}'.format(self.name, self.button_number), self.current_state_text)
+        if self.current_state_text == 'OFF' and self.long_press_active:
+            self.publish('{}/{}/longpress'.format(self.name, self.button_number), self.current_state_text)
+            self.long_press_active = False
         self.timing()
             
     @property
@@ -214,7 +218,7 @@ class PicoButton(Device):
         if self.current_state:  #Press
             self._long_press_task = self.loop.create_task(self.long_press())
             if self.loop.time() - self.start <= self.double_click_time:
-                self.publish('{}/double'.format(self.name), self.button_name_upper)
+                self.publish('{}/{}/double'.format(self.name, self.button_number), 'ON')
             self.start = self.loop.time()
         elif self._long_press_task:
             self._long_press_task.cancel()
@@ -222,7 +226,8 @@ class PicoButton(Device):
             
     async def long_press(self):
         await asyncio.sleep(self.long_press_time)
-        self.publish('{}/longpress'.format(self.name), self.button_name_upper)
+        self.publish('{}/{}/longpress'.format(self.name, self.button_number), 'ON')
+        self.long_press_active = True
         self._long_press_task = None
         
 
