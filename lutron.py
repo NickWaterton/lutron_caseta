@@ -235,6 +235,7 @@ class Caseta(MQTT):
     __version__ = __version__
     
     certs = {"keyfile":"caseta.key", "certfile":"caseta.crt", "ca_certs":"caseta-bridge.crt"}
+    no_device_id = ['activate_scene']
 
     def __init__(self, bridgeip=None, log=None, **kwargs):
         super().__init__(log=log, **kwargs)
@@ -243,7 +244,7 @@ class Caseta(MQTT):
         self.bridgeip = bridgeip
         self.bridge = None
         self.loop = asyncio.get_event_loop()
-        self.bridge_methods = {func:getattr(Smartbridge, func) for func in dir(Smartbridge) if callable(getattr(Smartbridge, func)) and not func.startswith("_")}
+        self.bridge_methods = {func:getattr(Smartbridge, func) for func in dir(Smartbridge) if callable(getattr(Smartbridge, func)) and (not func.startswith("_") and not func in self._method_dict.keys()) }
         self._method_dict.update(self.bridge_methods)
         
     def _setup(self):
@@ -331,9 +332,9 @@ class Caseta(MQTT):
             name = self.bridge.get_buttons().get(device_id, {}).get('name')
         return name
             
-    async def set_level(self, device_id, value, fade_time=0):
+    async def set_value(self, device_id, value, fade_time=0):
         '''
-        Override set_level in Smartbridge to lookup device_id from name, and parse args
+        Override set_value in Smartbridge to lookup device_id from name, and parse args
         '''
         if isinstance(value, tuple):
             fade_time = int(value[1])
@@ -364,7 +365,7 @@ class Caseta(MQTT):
     async def release(self, button_id):
         return await self._button_action(button_id, "Release")
         
-    async def activate_scene(self, scene_id, *args):
+    async def activate_scene(self, scene_id):
         #scene_id is a string
         scene_id = str(scene_id)
         if scene_id in self.bridge.get_scenes().keys():
@@ -382,15 +383,18 @@ class Caseta(MQTT):
         '''
         Override MQTT method
         extract command and args from MQTT msg, add device_name to args
+        insert self.bridge if it's a bridge command
         '''
+        device_id = is_button = None
         device_name = msg.topic.split('/')[-2]
         device_name = device_name = msg.topic.split('/')[-1] if device_name == self._name else device_name
         command, args = super()._get_command(msg)
         self.log.info('Received command: {}, device: {}, args: {}'.format(command, device_name, args))
-        nparams = len(signature(self._method_dict[command]).parameters)
-        br = self.bridge if command in self.bridge_methods.keys() else None
         args = [args] if not isinstance(args, list) else args
-        device_id, is_button = self._device_id_from_name(device_name, *args)
+        nparams = len(signature(self._method_dict[command]).parameters) if command else len(args)
+        br = self.bridge if command in self.bridge_methods.keys() else None
+        if command not in self.no_device_id:
+            device_id, is_button = self._device_id_from_name(device_name, *args)
         if len(args) > 0 and args[0] is None:
             args.pop(0)
         if device_id:
@@ -402,7 +406,7 @@ class Caseta(MQTT):
                     args.insert(0, br)
         while len(args) > nparams:  #truncate extra parameters
             args.pop()
-        self.log.info('Sending command: command: {}, args: {}'.format(command, args))    
+        self.log.info('Sending command: command: {}, args: {}'.format(command, args))
         return command, args
         
     def stop(self):
