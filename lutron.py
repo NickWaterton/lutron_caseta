@@ -192,6 +192,8 @@ class PicoButton(Device):
         '''
         get button number from button name
         '''
+        if button_name is None:
+            return False
         if isinstance(button_name, int):
             return button_name
         if button_name.isdigit():
@@ -240,6 +242,7 @@ class Caseta(MQTT):
         self.bridgeip = bridgeip
         self.bridge = None
         self.loop = asyncio.get_event_loop()
+        self._method_dict.update({func:getattr(Smartbridge, func)  for func in dir(Smartbridge) if callable(getattr(Smartbridge, func)) and not func.startswith("_")})
         
     def _setup(self):
         if all([os.path.exists(f) for f in self.certs.values()]):
@@ -307,7 +310,26 @@ class Caseta(MQTT):
             self.bridge.add_subscriber(callback.device_id, callback)
             callback()     #publish current value
             
-    async def set_level(self, device_name, value, fade_time=0):
+    def _device_id_from_name(self, device_name, button_number=None):
+        for device_id, device in self.bridge._button_subscribers.items():
+            if device_name == device.name and device.match(button_number):
+                self.log.info("Found Button: {} : settings: {}".format(device_id, device.device))
+                return device_id, True
+        for device_id, device in self.bridge._subscribers.items():
+            if device_name == device.name:
+                self.log.info("Found Device: {} : settings: {}".format(device_id, device.device))
+                return device_id, False
+        
+        self.log.warning('Device: {} NOT FOUND'.format(device_name))
+        return None, False
+        
+    def _device_name(self, device_id):
+        name = self.bridge.get_devices().get(device_id, {}).get('name')
+        if not name:
+            name = self.bridge.get_buttons().get(device_id, {}).get('name')
+        return name
+            
+    async def set_level(self, device_id, value, fade_time=0):
         '''
         Override set_level in Smartbridge to lookup device_id from name, and parse args
         '''
@@ -316,42 +338,29 @@ class Caseta(MQTT):
             value = value[0]
         if isinstance(value, str):
             value = 0 if value.upper() == 'OFF' else 100 if value.upper() == 'ON' else int(value)
-        self.log.info('Setting: {}, to: {}%, fade time: {} s'.format(device_name, value, fade_time))
-        for device_id, device in self.bridge._subscribers.items():
-            if device_name == device.name:
-                self.log.info("Found Device: {} : settings: {}".format(device_id, device.device))
-                await self.bridge.set_value(device_id, value, timedelta(seconds=fade_time))
-                return
-        self.log.warning('Device: {} NOT FOUND'.format(device_name))
+        self.log.info('Setting: {}, to: {}%, fade time: {} s'.format(self._device_name(device_id), value, fade_time))
+        await self.bridge.set_value(device_id, value, timedelta(seconds=fade_time)) 
         
-    async def _button_action(self, device_name, button_number, action):
+    async def _button_action(self, button_id, action):
         '''
-        Will perform action on the button of a pico device with the given device_name.
-        :param device_name: device name to click the button on
-        :param button_number: integer idicating button number
+        Will perform action on the button of a pico device with the given button_id.
+        :param button_id: device id of specific button
         :param action one of "PressAndRelease", "PressAndHold", "Release"
         '''
-        self.log.info('{} Pico: {}, button: {}'.format(action, device_name, button_number))
-        for button_id, picobutton in self.bridge._button_subscribers.items():
-            if device_name == picobutton.name and picobutton.match(button_number):
-                self.log.debug("Found Pico: {} : settings: {}".format(button_id, picobutton.device))
-                self.log.info('Sending Pico: {}, {} button: {}'.format(device_name, action, picobutton.button_name))
-                await self.bridge._request(
-                    "CreateRequest",
-                    f"/button/{button_id}/commandprocessor",
-                    {"Command": {"CommandType": action}},
-                )
-                return
-        self.log.warning('Pico: {} button: {} NOT FOUND'.format(device_name, button_number))
+        await self.bridge._request(
+            "CreateRequest",
+            f"/button/{button_id}/commandprocessor",
+            {"Command": {"CommandType": action}},
+        )
         
-    async def click(self, device_name, button_number):
-        return await self._button_action(device_name, button_number, "PressAndRelease")
+    async def click(self, button_id):
+        return await self._button_action(button_id, "PressAndRelease")
         
-    async def press(self, device_name, button_number):
-        return await self._button_action(device_name, button_number, "PressAndHold")
+    async def press(self, button_id):
+        return await self._button_action(button_id, "PressAndHold")
         
-    async def release(self, device_name, button_number):
-        return await self._button_action(device_name, button_number, "Release")
+    async def release(self, button_id):
+        return await self._button_action(button_id, "Release")
         
     async def activate_scene(self, scene_id, *args):
         #scene_id is a string
@@ -373,14 +382,22 @@ class Caseta(MQTT):
         extract command and args from MQTT msg, add device_name to args
         '''
         device_name = msg.topic.split('/')[-2]
-        device_name = None if device_name == self._name else device_name
+        device_name = msg.topic.split('/')[-1] if device_name == self._name else device_name
         command, args = super()._get_command(msg)
-        if device_name and args:
-            if isinstance(args, list):
-                args.insert(0, device_name)
-            else:
-                args = [device_name, args]
-        self.log.info('Received command: command: {}, args: {}'.format(command, args))    
+        if not args:
+            device_id, _ = self._device_id_from_name(device_name)
+            args = [self.bridge, device_id]
+        else:
+            device_id, is_button = self._device_id_from_name(device_name, *args)
+            if device_id:
+                if is_button:
+                    args = [device_id]
+                else:
+                    if isinstance(args, list):
+                        args.insert(0, device_id)
+                    else:
+                        args = [device_id, args]
+        self.log.debug('Received command: command: {}, args: {}'.format(command, args))    
         return command, args
         
     def stop(self):
