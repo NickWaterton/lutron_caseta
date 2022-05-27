@@ -5,11 +5,11 @@ Uses the LEAP protocol.
 
 ## Requirements
 
-Needs a Lutron Bridge or Bridge Pro 2
+Needs a Lutron Bridge or Bridge Pro 2  
 Python 3.6 or above only (uses asyncio)
 
 ### Packages required
-paho-mqtt
+paho-mqtt  
 pylutron-caseta (see https://github.com/gurumitts/pylutron-caseta)
 
 ## Usage
