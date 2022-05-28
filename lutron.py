@@ -240,7 +240,6 @@ class Caseta(MQTT):
     __version__ = __version__
     
     certs = {"keyfile":"caseta.key", "certfile":"caseta.crt", "ca_certs":"caseta-bridge.crt"}
-    no_device_id = ['activate_scene']
 
     def __init__(self, bridgeip=None, log=None, **kwargs):
         super().__init__(log=log, **kwargs)
@@ -319,16 +318,17 @@ class Caseta(MQTT):
             callback()     #publish current value
             
     def _device_id_from_name(self, device_name, button_number=None):
-        for device_id, device in self.bridge._button_subscribers.items():
-            if device_name == device.name and device.match(button_number):
-                self.log.info("Found Button: {} : settings: {}".format(device_id, device.device))
-                return device_id, True
-        for device_id, device in self.bridge._subscribers.items():
-            if device_name == device.name:
-                self.log.info("Found Device: {} : settings: {}".format(device_id, device.device))
-                return device_id, False
-        
-        self.log.warning('Device: {} NOT FOUND'.format(device_name))
+        if device_name:
+            for device_id, device in self.bridge._button_subscribers.items():
+                if device_name == device.name and device.match(button_number):
+                    self.log.info("Found Button: {} : settings: {}".format(device_id, device.device))
+                    return device_id, True
+            for device_id, device in self.bridge._subscribers.items():
+                if device_name == device.name:
+                    self.log.info("Found Device: {} : settings: {}".format(device_id, device.device))
+                    return device_id, False
+
+            self.log.warning('Device: {} NOT FOUND'.format(device_name))
         return None, False
         
     def _device_name(self, device_id):
@@ -370,18 +370,8 @@ class Caseta(MQTT):
     async def release(self, button_id):
         return await self._button_action(button_id, "Release")
         
-    async def activate_scene(self, scene_id):
-        #scene_id is a string
-        scene_id = str(scene_id)
-        if scene_id in self.bridge.get_scenes().keys():
-            await self.bridge.activate_scene(scene_id)
-            self.log.info('Activated scene: {} : {}'.format(scene_id, self.bridge.get_scenes()[scene_id].get('name')))
-        else:    
-            self.log.warning('Scene id: {} not found'.format(scene_id))
-        return 0
-        
     async def refresh(self, refresh):
-        if refresh == 1:
+        if refresh in[1,'1']:
             return await self.bridge._login()
         
     def _get_command(self, msg):
@@ -390,25 +380,23 @@ class Caseta(MQTT):
         extract command and args from MQTT msg, add device_name to args
         insert self.bridge if it's a bridge command
         '''
-        device_id = is_button = None
-        device_name = msg.topic.split('/')[-2]
-        device_name = device_name = msg.topic.split('/')[-1] if device_name == self._name else device_name
         command, args = super()._get_command(msg)
+        device_name = msg.topic.split('/')[-2]
+        device_name = msg.topic.split('/')[-1] if device_name == self._name else device_name
+        device_name = None if device_name == command else device_name
         self.log.info('Received command: {}, device: {}, args: {}'.format(command, device_name, args))
         args = [args] if not isinstance(args, list) else args
         nparams = len(signature(self._method_dict[command]).parameters) if command else len(args)
         br = self.bridge if command in self.bridge_methods.keys() else None
-        if command not in self.no_device_id:
-            device_id, is_button = self._device_id_from_name(device_name, *args)
-        if len(args) > 0 and args[0] is None:
-            args.pop(0)
+        device_id, is_button = self._device_id_from_name(device_name, *args)
+        args = [str(a) if isinstance( a, (int, float)) else a for a in args if a is not None]   #make string
         if device_id:
             if is_button:
                 args = [device_id]
             else:
                 args.insert(0, device_id)
-                if br:
-                    args.insert(0, br)
+        if br:
+            args.insert(0, br)
         while len(args) > nparams:  #truncate extra parameters
             args.pop()
         self.log.info('Sending command: command: {}, args: {}'.format(command, args))
