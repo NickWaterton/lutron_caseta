@@ -389,7 +389,7 @@ class Caseta(MQTT):
         nparams = len(signature(self._method_dict[command]).parameters) if command else len(args)
         br = self.bridge if command in self.bridge_methods.keys() else None
         device_id, is_button = self._device_id_from_name(device_name, *args)
-        args = [str(a) if isinstance( a, (int, float)) else a for a in args if a is not None]   #make string
+        args = [str(a) if command == 'activate_scene' else a for a in args if a is not None]   #make scene_id string
         if device_id:
             if is_button:
                 args = [device_id]
