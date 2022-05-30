@@ -48,10 +48,12 @@ class Device():
         self.publish(self.name, self.current_state)
         
     def __bool__(self):
-        return self.current_state != 0
+        if self.parent:
+            return self.parent.bridge.is_on(self.device_id)
+        return self.current_state > 0
         
     def __str__(self):
-        return str(self.current_state)
+        return 'ON' if bool(self) else 'OFF'
             
     @property
     def name(self):
@@ -172,9 +174,6 @@ class PicoButton(Device):
         
     def __bool__(self):
         return self.current_state == 'Press'
-        
-    def __str__(self):
-        return 'ON' if bool(self) else 'OFF'
             
     @property
     def button_groups(self):
