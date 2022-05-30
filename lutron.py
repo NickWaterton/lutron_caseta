@@ -46,6 +46,12 @@ class Device():
     def __call__(self):
         self.log.info('{}: {}, ID: {} value: {}'.format(self.type, self.name, self.device_id, self.current_state))
         self.publish(self.name, self.current_state)
+        
+    def __bool__(self):
+        return self.current_state != 0
+        
+    def __str__(self):
+        return str(self.current_state)
             
     @property
     def name(self):
@@ -160,9 +166,15 @@ class PicoButton(Device):
             msg = self.current_state
         elif self.current_state != msg:
             self.current_state = msg
-        self.log.info('{}: {}, Button: {}({}), action: {}'.format(self.type, self.name, self.button_number, self.button_name, self.current_state_text))
-        self.publish('{}/{}'.format(self.name, self.button_number), self.current_state_text)
+        self.log.info('{}: {}, Button: {}({}), action: {}'.format(self.type, self.name, self.button_number, self.button_name, str(self)))
+        self.publish('{}/{}'.format(self.name, self.button_number), str(self))
         self.timing()
+        
+    def __bool__(self):
+        return self.current_state == 'Press'
+        
+    def __str__(self):
+        return 'ON' if bool(self) else 'OFF'
             
     @property
     def button_groups(self):
@@ -178,19 +190,11 @@ class PicoButton(Device):
         
     @property
     def current_state(self):
-        return super().current_state == 'Press'
+        return super().current_state
         
     @current_state.setter    
     def current_state(self, state):
         self.device['current_state'] = state
-        
-    @property
-    def current_state_text(self):
-        return 'ON' if self.current_state else 'OFF'
-        
-    @property
-    def button_name_upper(self):
-        return self.button_name.upper()
         
     def button_number_from_name(self, button_name):
         '''
@@ -202,7 +206,7 @@ class PicoButton(Device):
             return button_name
         if button_name.isdigit():
             return int(button_name) 
-        return self.button_number if self.button_name_upper == button_name.upper() else None
+        return self.button_number if self.button_name.upper() == button_name.upper() else None
         
     def match(self, button_number):
         '''
@@ -214,7 +218,7 @@ class PicoButton(Device):
         '''
         generate double click and long press events
         '''
-        if self.current_state:  #Press
+        if bool(self):  #Press
             self._long_press_task = self.loop.create_task(self.long_press())
             if self.loop.time() - self.start <= self.double_click_time:
                 self.publish('{}/{}/double'.format(self.name, self.button_number), 'ON')
@@ -224,7 +228,7 @@ class PicoButton(Device):
                 self._long_press_task.cancel()
                 self._long_press_task = None
             if self.long_press_active:
-                self.publish('{}/{}/longpress'.format(self.name, self.button_number), self.current_state_text)
+                self.publish('{}/{}/longpress'.format(self.name, self.button_number), str(self))
                 self.long_press_active = False
             
     async def long_press(self):
