@@ -298,6 +298,7 @@ class Caseta(MQTT):
         try:
             await self.bridge.connect()
             self.log.info("Connected to bridge: {}".format(self.bridgeip))
+            self._publish('status', 'Connected')
                 
             for id, scene in self.bridge.get_scenes().items():
                 self.log.info('Found Scene: {} , {}'.format(id, scene)) 
@@ -388,6 +389,9 @@ class Caseta(MQTT):
     async def refresh(self, refresh):
         if refresh in[1, '1', 'True', 'true', True]:
             return await self.bridge._login()
+            
+    async def status(self):
+        return 'Connected' if self.bridge.is_connected() else 'Disconnected'
         
     def _get_command(self, msg):
         '''
@@ -485,6 +489,19 @@ def parse_args():
         default=None,
         help='MQTT broker password (default: %(default)s)')
     parser.add_argument(
+        '-poll', '--poll_interval',
+        action='store',
+        type=int,
+        default=0,
+        help='Polling interval (seconds) (0=off) (default: %(default)s)')
+    parser.add_argument(
+        '-pm', '--poll_methods',
+        nargs='*',
+        action='store',
+        type=str,
+        default='status',
+        help='Polling method (default: %(default)s)')
+    parser.add_argument(
         '-l', '--log',
         action='store',
         type=str,
@@ -554,7 +571,12 @@ if __name__ == "__main__":
 
     log.info("Python Version: {}".format(sys.version.replace('\n','')))
     
-    
+    if arg.poll_interval:
+        if not arg.poll_methods:
+            arg.poll_interval = 0
+        else:
+            log.info(f'Polling {arg.poll_methods} every {arg.poll_interval}s')
+
     loop = asyncio.get_event_loop()
     loop.set_debug(arg.debug)
     try:
@@ -567,6 +589,7 @@ if __name__ == "__main__":
                         pubtopic=arg.feedback,
                         topic=arg.topic,
                         name="caseta",
+                        poll=(arg.poll_interval, arg.poll_methods),
                         json_out=arg.json_out,
                         #log=log
                         )

@@ -165,7 +165,7 @@ class MQTT():
                 for cmd in self._polling:
                     if cmd in self._method_dict.keys():
                         result = await self._method_dict[cmd]()
-                        if self._json_out:
+                        if self._json_out or not isinstance(result, dict):
                             self._publish(cmd, result)
                         else:
                             self._decode_topics(result)
@@ -320,6 +320,7 @@ class MQTT():
         await asyncio.gather(*tasks, return_exceptions=True)
         self._tasks = {}
         if self._MQTT_connected:
+            self._publish('status', 'Shutdown')
             self._mqttc.disconnect()
             self._mqttc.loop_stop()
             self._mqttc = None
