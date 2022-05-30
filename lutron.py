@@ -158,7 +158,6 @@ class PicoButton(Device):
         self.long_press_time = 1
         self.start = self.loop.time()
         self._long_press_task = None
-        self.long_press_active = False
         if self.type not in self.picobuttons.keys():
             self.log.warning('Adding button type: {}'.format(self.type))
             self.picobuttons[self.type] = {}
@@ -218,23 +217,32 @@ class PicoButton(Device):
         generate double click and long press events
         '''
         if bool(self):  #Press
-            self._long_press_task = self.loop.create_task(self.long_press())
             if self.loop.time() - self.start <= self.double_click_time:
-                self.publish('{}/{}/double'.format(self.name, self.button_number), 'ON')
+                self.publish('{}/{}/double'.format(self.name, self.button_number), str(self))
             self.start = self.loop.time()
-        else:
-            if self._long_press_task:
-                self._long_press_task.cancel()
-                self._long_press_task = None
-            if self.long_press_active:
-                self.publish('{}/{}/longpress'.format(self.name, self.button_number), str(self))
-                self.long_press_active = False
+        self._long_press_task = self.long_press()
             
-    async def long_press(self):
-        await asyncio.sleep(self.long_press_time)
-        self.publish('{}/{}/longpress'.format(self.name, self.button_number), 'ON')
-        self.long_press_active = True
-        self._long_press_task = None
+    def long_press(self):
+        '''
+        longpress timing
+        returns asyncio.TimerHandle() or None
+        
+        if button is pressed, start callback in self.long_press_time seconds, return timer
+        if button is released, and timer has not been cancelled, cancel timer. return None
+        if time expires, publish button setting, cancel timer (canceled timer still exists)
+        if button is released after timer expires (and has been cancelled, but is not None),
+           publish current button setting, cancel timer and return None
+        '''
+        if bool(self):
+            if not self._long_press_task:
+                return self.loop.call_later(self.long_press_time, self.long_press)
+        else:
+            if self._long_press_task is None:
+                return None
+            if not self._long_press_task.cancelled():
+                return self._long_press_task.cancel()   #returns None
+        self.publish('{}/{}/longpress'.format(self.name, self.button_number), str(self))
+        return self._long_press_task.cancel()           #returns None
         
 
 class Caseta(MQTT):
@@ -378,7 +386,7 @@ class Caseta(MQTT):
         return await self._button_action(button_id, "Release")
         
     async def refresh(self, refresh):
-        if refresh in[1,'1']:
+        if refresh in[1, '1', 'True', 'true', True]:
             return await self.bridge._login()
         
     def _get_command(self, msg):
@@ -404,8 +412,7 @@ class Caseta(MQTT):
                 args.insert(0, device_id)
         if br:
             args.insert(0, br)
-        while len(args) > nparams:  #truncate extra parameters
-            args.pop()
+        args = args[:nparams]  #truncate extra parameters
         self.log.info('Sending command: command: {}, args: {}'.format(command, args))
         return command, args
         
