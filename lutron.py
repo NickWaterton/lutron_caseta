@@ -241,7 +241,7 @@ class PicoButton(Device):
                 return None
             if not self._long_press_task.cancelled():
                 return self._long_press_task.cancel()   #returns None
-        self.publish('{}/{}/longpress'.format(self.name, self.button_number), str(self))
+        self.publish('{}/{}/long'.format(self.name, self.button_number), str(self))
         return self._long_press_task.cancel()           #returns None
         
 
