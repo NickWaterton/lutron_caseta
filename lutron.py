@@ -146,7 +146,7 @@ class PicoButton(Device):
     def __init__(self, device, parent=None):
         super().__init__(device, parent)
         self.log = logging.getLogger('Main.'+__class__.__name__)
-        self.double_click_time = 0.5    #not long enough to capture Raise and lower double click
+        self.double_click_time = 0.5    #not long enough to capture Raise and Lower double click
         self.long_press_time = 1
         self.start = self.loop.time()
         self._long_press_task = None
@@ -155,14 +155,13 @@ class PicoButton(Device):
             self.log.warning('Adding button type: {}'.format(self.type))
             self.picobuttons[self.type] = {}
             
-    def __call__(self, msg):
-        if self.current_state != msg:
+    def __call__(self, msg=None):
+        if msg is None:
+            msg = self.current_state
+        elif self.current_state != msg:
             self.current_state = msg
         self.log.info('{}: {}, Button: {}({}), action: {}'.format(self.type, self.name, self.button_number, self.button_name, self.current_state_text))
         self.publish('{}/{}'.format(self.name, self.button_number), self.current_state_text)
-        if self.current_state_text == 'OFF' and self.long_press_active:
-            self.publish('{}/{}/longpress'.format(self.name, self.button_number), self.current_state_text)
-            self.long_press_active = False
         self.timing()
             
     @property
@@ -220,9 +219,13 @@ class PicoButton(Device):
             if self.loop.time() - self.start <= self.double_click_time:
                 self.publish('{}/{}/double'.format(self.name, self.button_number), 'ON')
             self.start = self.loop.time()
-        elif self._long_press_task:
-            self._long_press_task.cancel()
-            self._long_press_task = None
+        else:
+            if self._long_press_task:
+                self._long_press_task.cancel()
+                self._long_press_task = None
+            if self.long_press_active:
+                self.publish('{}/{}/longpress'.format(self.name, self.button_number), self.current_state_text)
+                self.long_press_active = False
             
     async def long_press(self):
         await asyncio.sleep(self.long_press_time)
@@ -301,6 +304,7 @@ class Caseta(MQTT):
                 self.log.info("Found {}: {}".format(type, device))
                 callback = PicoButton(device, self)
                 self.bridge.add_button_subscriber(callback.device_id, callback)
+                callback()     #publish current value
             return
         for device in self.bridge.get_devices_by_domain(type):
             self.log.info("Found {}: {}".format(type, device))
@@ -339,7 +343,7 @@ class Caseta(MQTT):
             
     async def set_value(self, device_id, value, fade_time=0):
         '''
-        Override set_value in Smartbridge to lookup device_id from name, and parse args
+        Override set_value in Smartbridge to parse args
         '''
         if isinstance(value, tuple):
             fade_time = int(value[1])
@@ -377,7 +381,7 @@ class Caseta(MQTT):
     def _get_command(self, msg):
         '''
         Override MQTT method
-        extract command and args from MQTT msg, add device_name to args
+        extract command and args from MQTT msg, get device_id from device_name
         insert self.bridge if it's a bridge command
         '''
         command, args = super()._get_command(msg)
@@ -419,9 +423,6 @@ class Caseta(MQTT):
     def _publish(self, topic=None, message=None):
         if message is not None:
             super()._publish(topic, message)
-        
-    async def _publish_command(self, command, args=None):
-        await super()._publish_command(command, args)
         
         
 def parse_args():
