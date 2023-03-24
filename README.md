@@ -12,6 +12,13 @@ Python 3.6 or above only (uses asyncio)
 paho-mqtt  
 pylutron-caseta (see https://github.com/gurumitts/pylutron-caseta)
 
+Install these with:
+
+```
+pip install -r requirements.txt
+```
+
+
 ## Usage
 
 ```
@@ -49,3 +56,12 @@ optional arguments:
 Where `192.168.100.141` is the ip address of your bridge, and `192.168.100.16` is the ip address of your MQTT broker
 
 The first time you run the command, you will be prompted to pair with the bridge by pressing the button on the bridge. This will download the neccessary certificates to allow secure communications. You only need to do this the first time you connect.
+
+## Sending Commands
+
+Use your favorite MQTT Client to publish:
+```
+topic: lutron/command/caseta/Kitchen_Kitchen Lights/set_value
+payload: 100
+```
+Aside from [set_value](lutron.py#L356), commands include: [click](lutron.py#L380), [press](lutron.py#L383), [release](lutron.py#L386), [refresh](lutron.py#L389), [status](lutron.py#L393).
