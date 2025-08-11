@@ -321,7 +321,7 @@ class Caseta(MQTTMixin):
         try:
             await self.bridge.connect()
             self.log.info("Connected to bridge: {}".format(self.bridgeip))
-            await self._publish('status', 'Connected')
+            self._publish('status', 'Connected')
                 
             for id, scene in self.bridge.get_scenes().items():
                 self.log.info('Found Scene: {} , {}'.format(id, scene)) 
@@ -457,13 +457,14 @@ class Caseta(MQTTMixin):
         put shutdown routines here
         '''
         self.log.info('received SIGINT/SIGTERM, shutting down')
+        await self._mqtt_stop()
         self._exit = True
         if self.bridge is not None:
             await self.bridge.close()
             
     def publish(self, topic=None, message=None):
         if message is not None:
-            self._add_task(self._publish(topic, message))
+            self._publish(topic, message)
         
         
 def parse_args():
