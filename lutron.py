@@ -3,7 +3,10 @@
 '''
 Asyncio library for communicating with Lutron caseta devices via Bridge pro, using LEAP protocol
 MQTT interface
+Make sure pylutron-caseta is installed and up to date.
 Based on https://github.com/gurumitts/pylutron-caseta
+see also https://github.com/dcode/pylutron-leap
+and https://github.com/johninaustin/pylutron-caseta/tree/ra3
 LEAP CommandType:
     GoToDimmedLevel
     GoToFanSpeed
@@ -17,6 +20,8 @@ LEAP CommandType:
     Lower
     Stop
 24/5/2022 V 1.0.0 N Waterton - Initial Release
+23/2/2023 V 1.0.1 N Waterton - adapted to python 3.10
+9/8/2025 V 1.1.0 N Waterton - updated to use aiomqtt and signals
 '''
 
 import logging
@@ -24,13 +29,14 @@ from logging.handlers import RotatingFileHandler
 import sys, argparse, os
 from datetime import timedelta
 from inspect import signature
+from signal import SIGTERM, SIGINT
 import asyncio
 
 from pylutron_caseta.smartbridge import Smartbridge, _LEAP_DEVICE_TYPES
 
-from mqtt import MQTT
+from MQTTMixin import MQTTMixin
 
-__version__ = __VERSION__ = '1.0.0'
+__version__ = __VERSION__ = '1.1.0'
 
 class Device():
     '''
@@ -89,7 +95,7 @@ class Device():
         
     def publish(self, topic, msg):
         if self.parent:
-            self.parent._publish(topic, msg)
+            self.parent.publish(topic, msg)
 
 class LightDimmer(Device):
     '''
@@ -245,7 +251,7 @@ class PicoButton(Device):
         return self._long_press_task.cancel()           #returns None
         
 
-class Caseta(MQTT):
+class Caseta(MQTTMixin):
     '''
     Represents a Lutron Caseta lighting System, with methods for status and issuing commands
     all methods not starting with '_' can be sent as commands to MQTT topic
@@ -255,20 +261,34 @@ class Caseta(MQTT):
     
     certs = {"keyfile":"caseta.key", "certfile":"caseta.crt", "ca_certs":"caseta-bridge.crt"}
 
-    def __init__(self, bridgeip=None, log=None, **kwargs):
-        super().__init__(log=log, **kwargs)
+    def __init__(self, bridgeip=None, log=None, *args, **kwargs):
+        super().__init__(*args, **kwargs, log=log)
         self.log = log if log is not None else logging.getLogger('Main.'+__class__.__name__)
         self.log.info(f'{__class__.__name__} library v{__class__.__version__}')
         self.bridgeip = bridgeip
         self.bridge = None
         self.loop = asyncio.get_event_loop()
+        self._exit = False
+        self.add_signals()
         self.bridge_methods = {func:getattr(Smartbridge, func) for func in dir(Smartbridge) if callable(getattr(Smartbridge, func)) and (not func.startswith("_") and not func in self._method_dict.keys()) }
         self._method_dict.update(self.bridge_methods)
         
+    def add_signals(self):
+        '''
+        setup signals to exit program
+        '''
+        try:    #might not work on windows
+            asyncio.get_running_loop().add_signal_handler(SIGINT, self.stop)
+            asyncio.get_running_loop().add_signal_handler(SIGTERM, self.stop)
+        except Exception:
+            self.log.warning('signal error')
+        
     def _setup(self):
         if all([os.path.exists(f) for f in self.certs.values()]):
+            self.log.info('connecting to lutron bridge: {}'.format(self.bridgeip))
             self.bridge = Smartbridge.create_tls(self.bridgeip, **self.certs)
             return True
+        self.log.warning('no certificates found for bridge in current directory')
         return False
         
     async def _pair(self):
@@ -290,6 +310,9 @@ class Caseta(MQTT):
         return False
         
     async def _connect(self):
+        if not self.bridgeip:
+            self.log.fatal('no bridge ip found: {}'.format(self.bridgeip))
+            return
         while not self._setup():
             while not await self._pair():
                 self.log.info('Retry pairing...')
@@ -298,19 +321,22 @@ class Caseta(MQTT):
         try:
             await self.bridge.connect()
             self.log.info("Connected to bridge: {}".format(self.bridgeip))
-            self._publish('status', 'Connected')
+            await self._publish('status', 'Connected')
                 
             for id, scene in self.bridge.get_scenes().items():
                 self.log.info('Found Scene: {} , {}'.format(id, scene)) 
             for device, setting in self.bridge.get_devices().items():
                 self.log.debug("Found Device: {} : settings: {}".format(device, setting))
             for type in _LEAP_DEVICE_TYPES.keys():
-                self._subscribe(type)
-
+                self._subscribe_callback(type)
+                
         except Exception as e:
             self.log.exception(e)
+                
+        while not self._exit:   #loop forever
+            await asyncio.sleep(1)
             
-    def _subscribe(self, type):
+    def _subscribe_callback(self, type):
         if type == 'sensor':
             for device in self.bridge.get_buttons().values():
                 self.log.info("Found {}: {}".format(type, device))
@@ -400,8 +426,8 @@ class Caseta(MQTT):
         insert self.bridge if it's a bridge command
         '''
         command, args = super()._get_command(msg)
-        device_name = msg.topic.split('/')[-2]
-        device_name = msg.topic.split('/')[-1] if device_name == self._name else device_name
+        device_name = str(msg.topic).split('/')[-2]
+        device_name = str(msg.topic).split('/')[-1] if device_name == self._name else device_name
         device_name = None if device_name == command else device_name
         self.log.info('Received command: {}, device: {}, args: {}'.format(command, device_name, args))
         args = [args] if not isinstance(args, list) else args
@@ -421,22 +447,23 @@ class Caseta(MQTT):
         return command, args
         
     def stop(self):
-        try:
-            self.loop.run_until_complete(self._stop())
-        except RuntimeError:
-            self.loop.create_task(self._stop())
+        '''
+        run _stop as a task
+        '''
+        asyncio.create_task(self._stop())
         
     async def _stop(self):
         '''
         put shutdown routines here
         '''
-        await super()._stop()
+        self.log.info('received SIGINT/SIGTERM, shutting down')
+        self._exit = True
         if self.bridge is not None:
             await self.bridge.close()
-        
-    def _publish(self, topic=None, message=None):
+            
+    def publish(self, topic=None, message=None):
         if message is not None:
-            super()._publish(topic, message)
+            self._add_task(self._publish(topic, message))
         
         
 def parse_args():
@@ -545,8 +572,8 @@ def setup_logger(logger_name, log_file, level=logging.DEBUG, console=False):
     except Exception as e:
         print("Error in Logging setup: %s - do you have permission to write the log file??" % e)
         sys.exit(1)
-            
-if __name__ == "__main__":
+        
+async def main():
     arg = parse_args()
     
     if arg.debug:
@@ -566,9 +593,7 @@ if __name__ == "__main__":
     log.info("*******************")
     
     log.debug('Debug Mode')
-
     log.info("{} Version: {}".format(sys.argv[0], __version__))
-
     log.info("Python Version: {}".format(sys.version.replace('\n','')))
     
     if arg.poll_interval:
@@ -577,32 +602,28 @@ if __name__ == "__main__":
         else:
             log.info(f'Polling {arg.poll_methods} every {arg.poll_interval}s')
 
-    loop = asyncio.get_event_loop()
-    loop.set_debug(arg.debug)
     try:
         if arg.broker:
-            r = Caseta( arg.bridgeip,
-                        ip=arg.broker,
-                        port=arg.port,
-                        user=arg.user,
-                        password=arg.passwd,
-                        pubtopic=arg.feedback,
-                        topic=arg.topic,
-                        name="caseta",
-                        poll=(arg.poll_interval, arg.poll_methods),
-                        json_out=arg.json_out,
-                        #log=log
+            r = Caseta( bridgeip        = arg.bridgeip,
+                        ip              = arg.broker,
+                        port            = arg.port,
+                        user            = arg.user,
+                        mqtt_password   = arg.passwd,
+                        pubtopic        = arg.feedback,
+                        topic           = arg.topic,
+                        name            = "caseta",
+                        poll            = (arg.poll_interval, arg.poll_methods),
+                        json_out        = arg.json_out,
+                        #log             = log
                         )
-            asyncio.gather(r._connect(), return_exceptions=True)
-            loop.run_forever()
         else:
-            r = Caseta(arg.bridgeip, log=log)
-            log.info(loop.run_until_complete(r._connect()))
+            r = Caseta(bridgeip=arg.bridgeip, log=log)
+        await r._connect()
             
     except (KeyboardInterrupt, SystemExit):
         log.info("System exit Received - Exiting program")
-        if arg.broker:
-            r.stop()
         
-    finally:
-        pass
+    log.info("Exited")
+            
+if __name__ == "__main__":
+    asyncio.run(main())
