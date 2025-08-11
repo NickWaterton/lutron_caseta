@@ -8,9 +8,9 @@ Uses the LEAP protocol.
 Needs a Lutron Bridge or Bridge Pro 2  
 Python 3.6 or above only (uses asyncio)
 
-### Packages required
-paho-mqtt  
+### Packages required  
 pylutron-caseta (see https://github.com/gurumitts/pylutron-caseta)
+MQTTMixin (pip install https://github.com/NickWaterton/MQTTMixin.git)
 
 ## Usage
 
