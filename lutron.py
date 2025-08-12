@@ -29,7 +29,7 @@ from logging.handlers import RotatingFileHandler
 import sys, argparse, os
 from datetime import timedelta
 from inspect import signature
-from signal import SIGTERM, SIGINT
+import signal
 import asyncio
 
 from pylutron_caseta.smartbridge import Smartbridge, _LEAP_DEVICE_TYPES
@@ -37,6 +37,8 @@ from pylutron_caseta.smartbridge import Smartbridge, _LEAP_DEVICE_TYPES
 from MQTTMixin import MQTTMixin
 
 __version__ = __VERSION__ = '1.1.0'
+
+logging.basicConfig(level=logging.INFO)
 
 class Device():
     '''
@@ -269,19 +271,20 @@ class Caseta(MQTTMixin):
         self.bridge = None
         self.loop = asyncio.get_event_loop()
         self._exit = False
-        self.add_signals()
+        self._add_signals()
         self.bridge_methods = {func:getattr(Smartbridge, func) for func in dir(Smartbridge) if callable(getattr(Smartbridge, func)) and (not func.startswith("_") and not func in self._method_dict.keys()) }
         self._method_dict.update(self.bridge_methods)
         
-    def add_signals(self):
+    def _add_signals(self):
         '''
         setup signals to exit program
         '''
-        try:    #might not work on windows
-            asyncio.get_running_loop().add_signal_handler(SIGINT, self.stop)
-            asyncio.get_running_loop().add_signal_handler(SIGTERM, self.stop)
-        except Exception:
-            self.log.warning('signal error')
+        try:
+            for sig in ['SIGINT', 'SIGTERM']:
+                if hasattr(signal, sig):
+                    asyncio.get_running_loop().add_signal_handler(getattr(signal, sig), self.stop)
+        except Exception as e:
+            self.log.warning('signal error {}'.format(e))
         
     def _setup(self):
         if all([os.path.exists(f) for f in self.certs.values()]):
@@ -310,9 +313,7 @@ class Caseta(MQTTMixin):
         return False
         
     async def _connect(self):
-        if not self.bridgeip:
-            self.log.fatal('no bridge ip found: {}'.format(self.bridgeip))
-            return
+
         while not self._setup():
             while not await self._pair():
                 self.log.info('Retry pairing...')
@@ -450,17 +451,17 @@ class Caseta(MQTTMixin):
         '''
         run _stop as a task
         '''
-        asyncio.create_task(self._stop())
+        self.stop_task = asyncio.create_task(self._stop())
         
     async def _stop(self):
         '''
         put shutdown routines here
         '''
         self.log.info('received SIGINT/SIGTERM, shutting down')
-        await self._mqtt_stop()
-        self._exit = True
         if self.bridge is not None:
             await self.bridge.close()
+        await self._mqtt_stop()
+        self._exit = True
             
     def publish(self, topic=None, message=None):
         if message is not None:
@@ -470,124 +471,47 @@ class Caseta(MQTTMixin):
 def parse_args():
     
     #-------- Command Line -----------------
-    parser = argparse.ArgumentParser(
-        description='Forward MQTT data to Lutron API')
-    parser.add_argument(
-        'bridgeip',
-        action='store',
-        type=str,
-        default=None,
-        help='Bridge ip Address (default: %(default)s)')
-    parser.add_argument(
-        '-t', '--topic',
-        action='store',
-        type=str,
-        default="/lutron/command",
-        help='MQTT Topic to send commands to, (can use # '
-             'and +) default: %(default)s)')
-    parser.add_argument(
-        '-T', '--feedback',
-        action='store',
-        type=str,
-        default="/lutron/feedback",
-        help='Topic on broker to publish feedback to (default: '
-             '%(default)s)')
-    parser.add_argument(
-        '-b', '--broker',
-        action='store',
-        type=str,
-        default=None,
-        help='ipaddress of MQTT broker (default: %(default)s)')
-    parser.add_argument(
-        '-p', '--port',
-        action='store',
-        type=int,
-        default=1883,
-        help='MQTT broker port number (default: %(default)s)')
-    parser.add_argument(
-        '-U', '--user',
-        action='store',
-        type=str,
-        default=None,
-        help='MQTT broker user name (default: %(default)s)')
-    parser.add_argument(
-        '-P', '--passwd',
-        action='store',
-        type=str,
-        default=None,
-        help='MQTT broker password (default: %(default)s)')
-    parser.add_argument(
-        '-poll', '--poll_interval',
-        action='store',
-        type=int,
-        default=0,
-        help='Polling interval (seconds) (0=off) (default: %(default)s)')
-    parser.add_argument(
-        '-pm', '--poll_methods',
-        nargs='*',
-        action='store',
-        type=str,
-        default='status',
-        help='Polling method (default: %(default)s)')
-    parser.add_argument(
-        '-l', '--log',
-        action='store',
-        type=str,
-        default="./lutron.log",
-        help='path/name of log file (default: %(default)s)')
-    parser.add_argument(
-        '-J', '--json_out',
-        action='store_true',
-        default = False,
-        help='publish topics as json (vs individual topics) (default: %(default)s)')
-    parser.add_argument(
-        '-D', '--debug',
-        action='store_true',
-        default = False,
-        help='debug mode')
-    parser.add_argument(
-        '--version',
-        action='version',
-        version="%(prog)s ({})".format(__version__),
-        help='Display version of this program')
+    parser = argparse.ArgumentParser(description='Forward MQTT data to Lutron API')
+    parser.add_argument('bridgeip', action='store', type=str, default=None, help='Bridge ip Address (default: %(default)s)')
+    parser.add_argument('-t', '--topic', action='store', type=str, default="/lutron/command", help='MQTT Topic to send commands to,  (can use # and +) default: %(default)s)')
+    parser.add_argument('-T', '--feedback', action='store', type=str, default="/lutron/feedback", help='Topic on broker to publish feedback to (default: %(default)s)')
+    parser.add_argument('-b', '--broker', action='store', type=str, default=None, help='ipaddress of MQTT broker (default: %(default)s)')
+    parser.add_argument('-p', '--port', action='store', type=int, default=1883, help='MQTT broker port number (default: %(default)s)')
+    parser.add_argument('-U', '--user', action='store', type=str, default=None, help='MQTT broker user name (default: %(default)s)')
+    parser.add_argument('-P', '--passwd', action='store', type=str, default=None, help='MQTT broker password (default: %(default)s)')
+    parser.add_argument('-poll', '--poll_interval', action='store', type=int, default=0, help='Polling interval (seconds) (0=off) (default: %(default)s)')
+    parser.add_argument('-pm', '--poll_methods', nargs='*', action='store', type=str, default='status', help='Polling method (default: %(default)s)')
+    parser.add_argument('-l', '--log', action='store', type=str, default="./lutron.log", help='path/name of log file (default: %(default)s)')
+    parser.add_argument('-J', '--json_out', action='store_true', default=False, help='publish topics as json (vs individual topics) (default: %(default)s)')
+    parser.add_argument('-D', '--debug', action='store_true', default=False, help='debug mode')
+    parser.add_argument('--version', action='version', version="%(prog)s ({})".format(__version__), help='Display version of this program')
     return parser.parse_args()
-    
-def setup_logger(logger_name, log_file, level=logging.DEBUG, console=False):
-    try: 
-        l = logging.getLogger(logger_name)
-        formatter = logging.Formatter('[%(asctime)s][%(levelname)5.5s](%(name)-20s) %(message)s')
-        if log_file is not None:
-            fileHandler = logging.handlers.RotatingFileHandler(log_file, mode='a', maxBytes=10000000, backupCount=10)
-            fileHandler.setFormatter(formatter)
-        if console == True:
-            #formatter = logging.Formatter('[%(levelname)1.1s %(name)-20s] %(message)s')
-            streamHandler = logging.StreamHandler()
-            streamHandler.setFormatter(formatter)
-
-        l.setLevel(level)
-        if log_file is not None:
-            l.addHandler(fileHandler)
-        if console == True:
-          l.addHandler(streamHandler)
+        
+def setup_logger(log_file, log_level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'):
+    try:
+        # Change root logger level from WARNING (default) to our desired level
+        logging.getLogger('').setLevel(log_level)
+        logging.basicConfig(format=format, level=log_level, force=True)
+        if log_file:
+            # Add file rotating handler, with level
+            rotatingHandler = logging.handlers.RotatingFileHandler(filename=log_file, maxBytes=1000, backupCount=5)
+            rotatingHandler.setLevel(log_level)
+            formatter = logging.Formatter(format)
+            rotatingHandler.setFormatter(formatter)
+            logging.getLogger('').addHandler(rotatingHandler)
              
     except Exception as e:
         print("Error in Logging setup: %s - do you have permission to write the log file??" % e)
         sys.exit(1)
         
 async def main():
-    arg = parse_args()
+    args = parse_args()
     
-    if arg.debug:
-        log_level = logging.DEBUG
-    else:
-        log_level = logging.INFO
-
-    #setup logging
-    log_name = 'Main'
-    setup_logger(log_name, arg.log, level=log_level,console=True)
-    setup_logger('pylutron_caseta', arg.log, level=log_level,console=True)
-
-    log = logging.getLogger(log_name)
+    setup_logger(args.log,
+                 logging.DEBUG if args.debug else logging.INFO,
+                 '%(asctime)s %(levelname)5.5s %(module)-10s %(funcName)-20s %(message)s')
+    
+    log = logging.getLogger('Main')
     
     log.info("*******************")
     log.info("* Program Started *")
@@ -597,28 +521,28 @@ async def main():
     log.info("{} Version: {}".format(sys.argv[0], __version__))
     log.info("Python Version: {}".format(sys.version.replace('\n','')))
     
-    if arg.poll_interval:
-        if not arg.poll_methods:
-            arg.poll_interval = 0
+    if args.poll_interval:
+        if not args.poll_methods:
+            args.poll_interval = 0
         else:
-            log.info(f'Polling {arg.poll_methods} every {arg.poll_interval}s')
+            log.info(f'Polling {args.poll_methods} every {args.poll_interval}s')
 
     try:
-        if arg.broker:
-            r = Caseta( bridgeip        = arg.bridgeip,
-                        ip              = arg.broker,
-                        port            = arg.port,
-                        user            = arg.user,
-                        mqtt_password   = arg.passwd,
-                        pubtopic        = arg.feedback,
-                        topic           = arg.topic,
+        if args.broker:
+            r = Caseta( bridgeip        = args.bridgeip,
+                        ip              = args.broker,
+                        port            = args.port,
+                        user            = args.user,
+                        mqtt_password   = args.passwd,
+                        pubtopic        = args.feedback,
+                        topic           = args.topic,
                         name            = "caseta",
-                        poll            = (arg.poll_interval, arg.poll_methods),
-                        json_out        = arg.json_out,
+                        poll            = (args.poll_interval, args.poll_methods),
+                        json_out        = args.json_out,
                         #log             = log
                         )
         else:
-            r = Caseta(bridgeip=arg.bridgeip, log=log)
+            r = Caseta(bridgeip=args.bridgeip, log=log)
         await r._connect()
             
     except (KeyboardInterrupt, SystemExit):
