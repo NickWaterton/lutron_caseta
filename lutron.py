@@ -280,9 +280,11 @@ class Caseta(MQTTMixin):
         setup signals to exit program
         '''
         try:
+            def quit():
+                asyncio.create_task(self._stop())
             for sig in ['SIGINT', 'SIGTERM']:
                 if hasattr(signal, sig):
-                    asyncio.get_running_loop().add_signal_handler(getattr(signal, sig), self.stop)
+                    asyncio.get_running_loop().add_signal_handler(getattr(signal, sig), quit)
         except Exception as e:
             self.log.warning('signal error {}'.format(e))
         
