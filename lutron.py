@@ -496,7 +496,7 @@ def setup_logger(log_file, log_level=logging.DEBUG, format='%(asctime)s - %(name
         logging.basicConfig(format=format, level=log_level, force=True)
         if log_file:
             # Add file rotating handler, with level
-            rotatingHandler = logging.handlers.RotatingFileHandler(filename=log_file, maxBytes=1000, backupCount=5)
+            rotatingHandler = logging.handlers.RotatingFileHandler(filename=log_file, maxBytes=10000000, backupCount=10)
             rotatingHandler.setLevel(log_level)
             formatter = logging.Formatter(format)
             rotatingHandler.setFormatter(formatter)
